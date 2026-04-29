@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ChainPay</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:sans-serif;background:#080B14;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.box{background:rgba(45,111,240,.08);border:1px solid rgba(45,111,240,.2);border-radius:14px;padding:16px;width:100%;max-width:360px;margin-bottom:28px}
+.label{color:rgba(255,255,255,.35);font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.msg{color:#fff;font-size:13px;line-height:1.6;word-break:break-all}
+.btn{width:100%;max-width:360px;padding:18px;border-radius:16px;border:none;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:10px}
+.primary{background:#2D6FF0;color:#fff}
+.secondary{background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.08)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.status{margin-top:16px;padding:13px 16px;border-radius:12px;font-size:13px;text-align:center;width:100%;max-width:360px;display:none}
+.info{background:rgba(45,111,240,.1);color:#63B3FF;display:block}
+.success{background:rgba(16,185,129,.1);color:#10B981;display:block}
+.error{background:rgba(239,68,68,.1);color:#EF4444;display:block}
+.debug{color:rgba(255,255,255,.2);font-size:10px;text-align:center;margin-top:16px;word-break:break-all;max-width:360px}
+</style>
+</head>
+<body>
+<h1 style="font-size:24px;font-weight:800;margin-bottom:8px">Connect Wallet</h1>
+<p style="color:rgba(255,255,255,.45);font-size:14px;text-align:center;margin-bottom:32px">Sign with MetaMask to prove ownership</p>
+<div class="box">
+  <div class="label">Message to sign</div>
+  <div class="msg" id="msg">waiting...</div>
+</div>
+<button class="btn primary" id="btn" onclick="doConnect()" disabled>Connect MetaMask</button>
+<button class="btn secondary" onclick="doCancel()">Cancel</button>
+<div class="status" id="status"></div>
+<div class="debug" id="debug"></div>
+<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+<script>
+var params   = new URLSearchParams(location.search);
+var nonce    = params.get("nonce")    || "";
+var token    = params.get("token")    || "";
+var redirect = params.get("redirect") || "";
+
+document.getElementById("debug").textContent = "nonce=" + nonce.slice(0,8) + "...";
+
+if (nonce) {
+  document.getElementById("msg").textContent = "Link wallet to ChainPay account: " + nonce;
+  document.getElementById("btn").disabled = false;
+} else {
+  document.getElementById("msg").textContent = "ERROR: no nonce param";
+  showStatus("Missing nonce. Go back to app.", "error");
+}
+
+function showStatus(m,t){
+  var e = document.getElementById("status");
+  e.textContent = m;
+  e.className = "status " + t;
+}
+
+function doCancel(){
+  if (redirect) location.href = redirect + "?cancelled=1";
+  else window.close();
+}
+
+async function doConnect(){
+  if (!nonce) return;
+  var btn = document.getElementById("btn");
+  btn.disabled = true;
+  btn.textContent = "Connecting...";
+  try {
+    // Use window.ethereum directly (MetaMask browser extension)
+    if (!window.ethereum) throw new Error("MetaMask not found. Please install MetaMask extension.");
+    
+    showStatus("Requesting MetaMask access...", "info");
+    var accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    var address = accounts[0];
+    
+    var message = "Link wallet to ChainPay account: " + nonce;
+    document.getElementById("msg").textContent = message;
+    
+    showStatus("Please sign the message in MetaMask...", "info");
+    btn.textContent = "Waiting for signature...";
+    
+    var provider = new ethers.providers.Web3Provider(window.ethereum);
+    var signer = provider.getSigner();
+    var sig = await signer.signMessage(message);
+    
+    showStatus("Signed! Saving to server...", "success");
+    
+    var res = await fetch(location.origin + "/api/v1/wallet", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify({ walletAddress: address, signature: sig, message: message })
+    });
+    
+    var json = await res.json();
+    if (!res.ok && json.code !== "WALLET_EXISTS") throw new Error(json.error || "Server error");
+    
+    showStatus("Wallet linked! Returning to app...", "success");
+    btn.textContent = "Done!";
+    
+    setTimeout(function(){
+      if (redirect) location.href = redirect + "?address=" + encodeURIComponent(address) + "&success=1";
+    }, 1500);
+    
+  } catch(err) {
+    var m = err.message || "Failed";
+    var cancelled = ["denied","rejected","cancel","closed"].some(function(w){
+      return m.toLowerCase().indexOf(w) !== -1;
+    });
+    showStatus(cancelled ? "Cancelled. Tap Try Again." : "Error: " + m, "error");
+    btn.disabled = false;
+    btn.textContent = "Try Again";
+  }
+}
+</script>
+</body>
+</html>
