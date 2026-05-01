@@ -300,3 +300,32 @@ exports.pending = async (req, res) => {
     return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
   }
 };
+// POST /transactions/record  — called by browser after MetaMask signs
+exports.record = async (req, res) => {
+  const { txHash, from, to, amountEth, amountWei } = req.body;
+
+  if (!txHash || !from || !to) {
+    return res.status(400).json({ error: 'txHash, from and to required', code: 'VALIDATION_ERROR' });
+  }
+
+  try {
+    await db('transactions').insert({
+      tx_hash:      txHash,
+      from_address: from,
+      to_address:   to,
+      amount_wei:   amountWei || '0',
+      status:       'pending',
+      created_at:   new Date(),
+      updated_at:   new Date(),
+    }).onConflict('tx_hash').ignore();
+
+    return res.status(201).json({
+      txHash,
+      status: 'pending',
+      etherscanUrl: (process.env.ETHERSCAN_BASE_URL || 'https://sepolia.etherscan.io/tx/') + txHash,
+    });
+  } catch (err) {
+    console.error('Record error:', err.message);
+    return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
+  }
+};
