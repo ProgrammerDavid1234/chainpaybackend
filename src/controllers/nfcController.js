@@ -4,7 +4,7 @@ const ethers = require('ethers');
 // POST /api/v1/nfc/request  — receiver calls this to get an NFC payload
 exports.createRequest = async (req, res) => {
   const { amountEth } = req.body;
-  if (!amountEth || isNaN(parseFloat(amountEth)) || parseFloat(amountEth) <= 0)
+  if (!amountEth || isNaN(parseFloat(amountEth)) || parseFloat(amountEth) < 0.0001)
     return res.status(400).json({ error: 'Valid amountEth required', code: 'VALIDATION_ERROR' });
 
   try {
