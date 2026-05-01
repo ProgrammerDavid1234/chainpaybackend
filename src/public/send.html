@@ -88,15 +88,38 @@ async function doSend(){
   btn.textContent = "Connecting MetaMask...";
   try {
     if (!window.ethereum) throw new Error("MetaMask not found. Please open in MetaMask browser.");
+
+    // Force Sepolia testnet (chainId 11155111 = 0xaa36a7)
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0xaa36a7" }],
+      });
+    } catch(switchErr) {
+      // If Sepolia not added, add it
+      if (switchErr.code === 4902) {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: "0xaa36a7",
+            chainName: "Sepolia Testnet",
+            nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://rpc.sepolia.org"],
+            blockExplorerUrls: ["https://sepolia.etherscan.io"]
+          }]
+        });
+      }
+    }
+
     var accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
     var from = accounts[0];
     var provider = new ethers.providers.Web3Provider(window.ethereum);
     var signer = provider.getSigner();
 
-    // Check balance
+    // Check balance on Sepolia
     var balance = await provider.getBalance(from);
     var valueWei = ethers.utils.parseEther(amount);
-    if (balance.lt(valueWei)) throw new Error("Insufficient balance in your wallet");
+    if (balance.lt(valueWei)) throw new Error("Insufficient Sepolia ETH balance. You have " + ethers.utils.formatEther(balance) + " ETH");
 
     showStatus("Confirm the transaction in MetaMask...", "info");
     btn.textContent = "Waiting for confirmation...";
