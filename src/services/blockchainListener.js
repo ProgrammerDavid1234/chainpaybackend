@@ -129,4 +129,50 @@ const reconnect = () => {
   }, reconnectDelay);
 };
 
-exports.start = setupListeners;
+// Poll pending transactions every 30 seconds and confirm them
+const pollPendingTransactions = async () => {
+  try {
+    const provider = getProvider();
+    const pending = await db('transactions').where({ status: 'pending' });
+    
+    for (const tx of pending) {
+      try {
+        const receipt = await provider.getTransactionReceipt(tx.tx_hash);
+        if (receipt) {
+          const status = receipt.status === 1 ? 'confirmed' : 'failed';
+          await db('transactions')
+            .where({ tx_hash: tx.tx_hash })
+            .update({
+              status,
+              block_number: receipt.blockNumber,
+              confirmed_at: new Date(),
+              updated_at:   new Date(),
+            });
+          console.log(`TX ${tx.tx_hash.slice(0,12)} -> ${status}`);
+
+          // Notify users via SSE
+          if (sendToUser) {
+            const [sender, receiver] = await Promise.all([
+              db('users').whereRaw('LOWER(wallet_address) = ?', [tx.from_address.toLowerCase()]).first(),
+              db('users').whereRaw('LOWER(wallet_address) = ?', [tx.to_address.toLowerCase()]).first(),
+            ]);
+            if (sender) sendToUser(sender.id, 'payment_confirmed', { txHash: tx.tx_hash, status });
+            if (receiver) sendToUser(receiver.id, 'payment_received', { txHash: tx.tx_hash, status, amountEth: ethers.formatEther(tx.amount_wei) });
+          }
+        }
+      } catch (err) {
+        console.error('Poll tx error:', tx.tx_hash, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Poll pending error:', err.message);
+  }
+};
+
+exports.start = async () => {
+  await setupListeners();
+  // Poll every 30 seconds
+  setInterval(pollPendingTransactions, 30000);
+  // Also run immediately
+  setTimeout(pollPendingTransactions, 5000);
+};
