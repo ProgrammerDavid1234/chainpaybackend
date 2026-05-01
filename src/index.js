@@ -29,6 +29,7 @@ app.use(express.json({ limit: '10kb' }));
 app.use('/api/v1/auth',         require('./routes/auth'));
 app.use('/api/v1/wallet',       require('./routes/wallet'));
 app.use('/api/v1/transactions', require('./routes/transactions'));
+app.use('/api/v1/nfc',          require('./routes/nfc'));
 app.use('/api/v1/events',       eventsRouter);
 
 app.get('/health', (req, res) => res.json({ 
