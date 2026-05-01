@@ -8,16 +8,17 @@ const { router: eventsRouter, sendToUser } = require('./routes/events');
 const blockchainListener = require('./services/blockchainListener');
 const app = express();
 
-// Allow connect page to load external scripts
-app.use('/connect', (req, res, next) => {
+// Allow send and connect pages to load external scripts
+app.use(['/connect', '/send'], (req, res, next) => {
   res.setHeader('Content-Security-Policy',
     "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
   );
   next();
 });
 
-// Serve connect page BEFORE helmet
+// Serve connect and send pages BEFORE helmet
 app.use('/connect', express.static(require('path').join(__dirname, 'public'), { etag: false, maxAge: 0 }));
+app.use('/send', (req, res) => res.sendFile(require('path').join(__dirname, 'public', 'send.html')));
 
 // Helmet for all other routes
 app.use(helmet());

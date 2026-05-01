@@ -7,11 +7,11 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:sans-serif;background:#080B14;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
-.card{background:rgba(45,111,240,.08);border:1px solid rgba(45,111,240,.2);border-radius:14px;padding:20px;width:100%;max-width:380px;margin-bottom:20px}
+.card{background:rgba(45,111,240,.08);border:1px solid rgba(45,111,240,.2);border-radius:14px;padding:20px;width:100%;max-width:380px;margin-bottom:16px}
 .label{color:rgba(255,255,255,.35);font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
-.value{color:#fff;font-size:15px;font-weight:600;word-break:break-all}
-.amount{font-size:32px;font-weight:800;color:#2D6FF0;margin:4px 0}
-.usd{color:rgba(255,255,255,.4);font-size:13px}
+.value{color:#fff;font-size:14px;font-weight:600;word-break:break-all}
+.amount{font-size:36px;font-weight:800;color:#2D6FF0}
+.usd{color:rgba(255,255,255,.4);font-size:13px;margin-top:4px}
 .btn{width:100%;max-width:380px;padding:18px;border-radius:16px;border:none;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:10px}
 .primary{background:#2D6FF0;color:#fff}
 .secondary{background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.08)}
@@ -20,11 +20,10 @@ body{font-family:sans-serif;background:#080B14;color:#fff;min-height:100vh;displ
 .info{background:rgba(45,111,240,.1);color:#63B3FF;display:block}
 .success{background:rgba(16,185,129,.1);color:#10B981;display:block}
 .error{background:rgba(239,68,68,.1);color:#EF4444;display:block}
-.warning{background:rgba(255,165,0,.1);color:#FFA500;display:block}
-.divider{height:1px;background:rgba(255,255,255,.06);margin:12px 0}
-.row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;margin-bottom:6px}
 .row-label{color:rgba(255,255,255,.4);font-size:13px}
 .row-value{color:#fff;font-size:13px;font-weight:600}
+.divider{height:1px;background:rgba(255,255,255,.06);margin:10px 0}
 </style>
 </head>
 <body>
@@ -32,25 +31,25 @@ body{font-family:sans-serif;background:#080B14;color:#fff;min-height:100vh;displ
 <p style="color:rgba(255,255,255,.45);font-size:13px;text-align:center;margin-bottom:24px">Review and sign with MetaMask</p>
 
 <div class="card">
-  <div class="label">Sending</div>
+  <div class="label">Amount</div>
   <div class="amount" id="amountEth">...</div>
   <div class="usd" id="amountUsd"></div>
 </div>
 
 <div class="card">
-  <div class="label">To</div>
+  <div class="label">To Address</div>
   <div class="value" id="toAddress">...</div>
 </div>
 
 <div class="card">
   <div class="row"><span class="row-label">Network</span><span class="row-value">Sepolia Testnet</span></div>
   <div class="divider"></div>
-  <div class="row"><span class="row-label">Gas (est.)</span><span class="row-value" id="gasEst">calculating...</span></div>
+  <div class="row"><span class="row-label">Est. Gas</span><span class="row-value">~0.0001 ETH</span></div>
   <div class="divider"></div>
-  <div class="row"><span class="row-label">Total</span><span class="row-value" id="totalAmt">...</span></div>
+  <div class="row"><span class="row-label">You Pay</span><span class="row-value" id="total">...</span></div>
 </div>
 
-<button class="btn primary" id="btn" onclick="doSend()" disabled>Sign & Send</button>
+<button class="btn primary" id="btn" onclick="doSend()" disabled>Sign & Send with MetaMask</button>
 <button class="btn secondary" onclick="doCancel()">Cancel</button>
 <div class="status" id="status"></div>
 
@@ -62,15 +61,11 @@ var amount   = params.get("amount")   || "";
 var token    = params.get("token")    || "";
 var redirect = params.get("redirect") || "";
 
-// Populate UI
-document.getElementById("toAddress").textContent  = to || "Missing address";
-document.getElementById("amountEth").textContent  = amount ? amount + " ETH" : "Missing amount";
-document.getElementById("totalAmt").textContent   = amount ? parseFloat(amount).toFixed(6) + " ETH" : "...";
-
-// Estimate gas display
-if (amount && to) {
-  document.getElementById("gasEst").textContent = "~0.0001 ETH";
+if (to && amount) {
+  document.getElementById("toAddress").textContent = to;
+  document.getElementById("amountEth").textContent = amount + " ETH";
   document.getElementById("amountUsd").textContent = "≈ $" + (parseFloat(amount) * 3000).toFixed(2) + " USD";
+  document.getElementById("total").textContent = (parseFloat(amount) + 0.0001).toFixed(6) + " ETH";
   document.getElementById("btn").disabled = false;
 } else {
   showStatus("Missing transaction details. Go back to app.", "error");
@@ -91,60 +86,49 @@ async function doSend(){
   var btn = document.getElementById("btn");
   btn.disabled = true;
   btn.textContent = "Connecting MetaMask...";
-
   try {
-    if (!window.ethereum) throw new Error("MetaMask not found. Open in MetaMask browser.");
-
-    // Request accounts
+    if (!window.ethereum) throw new Error("MetaMask not found. Please open in MetaMask browser.");
     var accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
     var from = accounts[0];
-
     var provider = new ethers.providers.Web3Provider(window.ethereum);
-    var signer   = provider.getSigner();
+    var signer = provider.getSigner();
 
     // Check balance
     var balance = await provider.getBalance(from);
     var valueWei = ethers.utils.parseEther(amount);
-    if (balance.lt(valueWei)) {
-      throw new Error("Insufficient balance in your wallet");
-    }
+    if (balance.lt(valueWei)) throw new Error("Insufficient balance in your wallet");
 
-    showStatus("Please confirm the transaction in MetaMask...", "info");
-    btn.textContent = "Waiting for MetaMask...";
+    showStatus("Confirm the transaction in MetaMask...", "info");
+    btn.textContent = "Waiting for confirmation...";
 
-    // Send transaction directly from MetaMask
-    var tx = await signer.sendTransaction({
-      to: to,
-      value: valueWei,
-    });
+    // Send from user wallet
+    var tx = await signer.sendTransaction({ to: to, value: valueWei });
 
-    showStatus("Transaction submitted! Saving...", "success");
-    btn.textContent = "Broadcasting...";
+    showStatus("Transaction submitted! Recording...", "success");
 
-    // Record transaction on backend
-    var res = await fetch(location.origin + "/api/v1/transactions/record", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + token
-      },
-      body: JSON.stringify({
-        txHash:      tx.hash,
-        from:        from,
-        to:          to,
-        amountEth:   amount,
-        amountWei:   valueWei.toString(),
-      })
-    });
+    // Record on backend
+    try {
+      await fetch(location.origin + "/api/v1/transactions/record", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token
+        },
+        body: JSON.stringify({
+          txHash:    tx.hash,
+          from:      from,
+          to:        to,
+          amountEth: amount,
+          amountWei: valueWei.toString(),
+        })
+      });
+    } catch(_) {}
 
-    var json = await res.json();
-    showStatus("Sent! TX: " + tx.hash.slice(0,12) + "...", "success");
+    showStatus("Sent! Returning to app...", "success");
     btn.textContent = "Done!";
 
     setTimeout(function(){
-      if (redirect) {
-        location.href = redirect + "?txHash=" + encodeURIComponent(tx.hash) + "&success=1";
-      }
+      if (redirect) location.href = redirect + "?txHash=" + encodeURIComponent(tx.hash) + "&success=1";
     }, 1500);
 
   } catch(err) {
@@ -152,7 +136,7 @@ async function doSend(){
     var cancelled = ["denied","rejected","cancel","user rejected"].some(function(w){
       return m.toLowerCase().indexOf(w) !== -1;
     });
-    showStatus(cancelled ? "Transaction cancelled." : "Error: " + m, "error");
+    showStatus(cancelled ? "Cancelled." : "Error: " + m, "error");
     btn.disabled = false;
     btn.textContent = "Try Again";
   }
