@@ -1,5 +1,5 @@
 exports.up = function(knex) {
-  return knex.schema.createTable('nfc_requests', (t) => {
+  return knex.schema.createTableIfNotExists('nfc_requests', (t) => {
     t.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     t.string('from_user_id').notNullable();
     t.string('to_address').notNullable();
