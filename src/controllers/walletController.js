@@ -1,3 +1,26 @@
+// ── GET /wallet/address ─────────────────────────────────────────────────────
+exports.getWalletAddress = async (req, res) => {
+  try {
+    const user = await db('users')
+      .where({ id: req.user.sub })
+      .select('wallet_address')
+      .first();
+
+    if (!user || !user.wallet_address) {
+      return res.status(404).json({
+        error: 'No wallet address found for this user',
+        code: 'WALLET_NOT_FOUND',
+      });
+    }
+
+    return res.status(200).json({
+      walletAddress: user.wallet_address,
+    });
+  } catch (err) {
+    console.error('Get wallet address error:', err.message);
+    return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
+  }
+};
 const db     = require('../db/knex');
 const { ethers } = require('ethers');
 const crypto = require('crypto');
