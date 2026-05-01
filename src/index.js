@@ -46,6 +46,14 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, async () => {
+  // Auto-run pending migrations on every startup
+  try {
+    const knex = require('./db/knex');
+    await knex.migrate.latest();
+    console.log('Migrations up to date');
+  } catch (err) {
+    console.error('Migration failed:', err.message);
+  }
   console.log('ChainPay backend running on port ' + PORT);
   blockchainListener.setSendToUser(sendToUser);
   await blockchainListener.start();
