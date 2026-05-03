@@ -174,6 +174,7 @@ exports.send = async (req, res) => {
     }
     toAddress = recipient.wallet_address;
   }
+};
 
 // POST /transactions/broadcast
 exports.broadcast = async (req, res) => {
