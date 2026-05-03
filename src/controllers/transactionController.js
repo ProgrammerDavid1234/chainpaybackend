@@ -155,64 +155,25 @@ exports.verify = async (req, res) => {
 
 // POST /transactions/send
 exports.send = async (req, res) => {
-  const { to, amount } = req.body;
+  const { to, toName, amount } = req.body;
 
-  if (!to || !amount) {
-    return res.status(400).json({ error: 'Recipient (to) and amount are required', code: 'VALIDATION_ERROR' });
+  // Accept either a wallet address (`to`) or a display name (`toName`)
+  if ((!to && !toName) || !amount) {
+    return res.status(400).json({ error: 'Recipient (to or toName) and amount are required', code: 'VALIDATION_ERROR' });
   }
 
-  let toAddress = to;
-  // If 'to' is not a valid address, treat it as a name and look up the wallet address
-  if (!ethers.isAddress(to)) {
-    const recipient = await db('users').whereRaw('LOWER(name) = ?', [to.toLowerCase()]).select('wallet_address').first();
+  let toAddress = to || null;
+
+  // Resolve by name if toName was provided, or if `to` is not a valid address
+  const needsLookup = toName || (to && !ethers.isAddress(to));
+  if (needsLookup) {
+    const lookupName = toName || to;
+    const recipient = await db('users').whereRaw('LOWER(name) = ?', [lookupName.toLowerCase()]).select('wallet_address').first();
     if (!recipient || !recipient.wallet_address) {
       return res.status(404).json({ error: 'Recipient not found or has no wallet', code: 'RECIPIENT_NOT_FOUND' });
     }
     toAddress = recipient.wallet_address;
   }
-
-  try {
-    const user = await db('users').where({ id: req.user.sub }).select('wallet_address').first();
-    if (!user.wallet_address) {
-      return res.status(400).json({ error: 'No wallet linked', code: 'WALLET_NOT_FOUND' });
-    }
-
-    const provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
-    const from     = user.wallet_address;
-
-    // Get nonce for the sender
-    const nonce = await provider.getTransactionCount(from);
-
-    // Estimate gas
-    const gasEstimate = await provider.estimateGas({
-      from,
-      to: toAddress,
-      value: ethers.parseEther(amount),
-    });
-
-    // Get fee data
-    const feeData = await provider.getFeeData();
-
-    // Prepare transaction data for client-side signing
-    const txData = {
-      from: from,
-      to: toAddress,
-      value: ethers.parseEther(amount).toString(),
-      gasLimit: gasEstimate.toString(),
-      gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
-      nonce: nonce.toString(),
-      chainId: (await provider.getNetwork()).chainId.toString(),
-    };
-
-    return res.status(200).json({
-      txData,
-      note: 'Use this data to sign and send the transaction from your wallet. The transaction will be tracked once confirmed on the blockchain.',
-    });
-  } catch (err) {
-    console.error('Send preparation error:', err.message);
-    return res.status(500).json({ error: 'Transaction preparation failed', code: 'BLOCKCHAIN_ERROR' });
-  }
-};
 
 // POST /transactions/broadcast
 exports.broadcast = async (req, res) => {
