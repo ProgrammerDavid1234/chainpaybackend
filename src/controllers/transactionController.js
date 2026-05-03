@@ -157,8 +157,18 @@ exports.verify = async (req, res) => {
 exports.send = async (req, res) => {
   const { to, amount } = req.body;
 
-  if (!to || !amount || !ethers.isAddress(to)) {
-    return res.status(400).json({ error: 'Valid to address and amount required', code: 'VALIDATION_ERROR' });
+  if (!to || !amount) {
+    return res.status(400).json({ error: 'Recipient (to) and amount are required', code: 'VALIDATION_ERROR' });
+  }
+
+  let toAddress = to;
+  // If 'to' is not a valid address, treat it as a name and look up the wallet address
+  if (!ethers.isAddress(to)) {
+    const recipient = await db('users').whereRaw('LOWER(name) = ?', [to.toLowerCase()]).select('wallet_address').first();
+    if (!recipient || !recipient.wallet_address) {
+      return res.status(404).json({ error: 'Recipient not found or has no wallet', code: 'RECIPIENT_NOT_FOUND' });
+    }
+    toAddress = recipient.wallet_address;
   }
 
   try {
@@ -176,7 +186,7 @@ exports.send = async (req, res) => {
     // Estimate gas
     const gasEstimate = await provider.estimateGas({
       from,
-      to,
+      to: toAddress,
       value: ethers.parseEther(amount),
     });
 
@@ -186,7 +196,7 @@ exports.send = async (req, res) => {
     // Prepare transaction data for client-side signing
     const txData = {
       from: from,
-      to: to,
+      to: toAddress,
       value: ethers.parseEther(amount).toString(),
       gasLimit: gasEstimate.toString(),
       gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
