@@ -1,3 +1,4 @@
+const QRCode = require('qrcode');
 const bcrypt = require('bcrypt');
 const jwt    = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
@@ -116,6 +117,27 @@ exports.me = async (req, res) => {
     });
   } catch (err) {
     console.error('Me error:', err.message);
+    return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
+  }
+};
+
+// GET /auth/me/qrcode
+exports.qrCode = async (req, res) => {
+  try {
+    const user = await db('users')
+      .where({ id: req.user.sub })
+      .select('wallet_address')
+      .first();
+
+    if (!user || !user.wallet_address) {
+      return res.status(404).json({ error: 'Wallet address not found', code: 'NOT_FOUND' });
+    }
+
+    // Generate QR code as a PNG image
+    res.setHeader('Content-Type', 'image/png');
+    QRCode.toFileStream(res, user.wallet_address, { type: 'png' });
+  } catch (err) {
+    console.error('QR code error:', err.message);
     return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
   }
 };
