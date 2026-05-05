@@ -1,13 +1,19 @@
 const db     = require('../db/knex');
 const { ethers } = require('ethers');
+const cache  = require('../middleware/cache');
 
 // GET /transactions
 exports.list = async (req, res) => {
   const { filter = 'all', page = 1, limit = 20 } = req.query;
   const offset = (page - 1) * limit;
+  const userId = req.user.sub;
+
+  const cacheKey = cache.keys.transactions(userId, filter, page);
+  const cached   = cache.get(cacheKey);
+  if (cached) return res.status(200).json(cached);
 
   try {
-    const user = await db('users').where({ id: req.user.sub }).select('wallet_address').first();
+    const user = await db('users').where({ id: userId }).select('wallet_address').first();
     if (!user.wallet_address) {
       return res.status(200).json({ transactions: [], total: 0, page: 1, limit: 20 });
     }
@@ -52,13 +58,16 @@ exports.list = async (req, res) => {
       etherscanUrl: `${process.env.ETHERSCAN_BASE_URL}${tx.tx_hash}`,
     }));
 
-    return res.status(200).json({
+    const payload = {
       transactions: formatted,
       total:        parseInt(total.count),
       page:         parseInt(page),
       limit:        parseInt(limit),
       pages:        Math.ceil(total.count / limit),
-    });
+    };
+
+    cache.set(cacheKey, payload, cache.CACHE_TTL.TRANSACTIONS);
+    return res.status(200).json(payload);
   } catch (err) {
     console.error('List transactions error:', err.message);
     return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
@@ -72,7 +81,6 @@ exports.getOne = async (req, res) => {
   try {
     let tx = await db('transactions').where({ tx_hash: txHash }).first();
 
-    // If not in DB, check the blockchain directly
     if (!tx) {
       try {
         const provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
@@ -83,7 +91,6 @@ exports.getOne = async (req, res) => {
           return res.status(404).json({ error: 'Transaction not found', code: 'NOT_FOUND' });
         }
 
-        // Write it to DB
         await db('transactions').insert({
           tx_hash:      txHash,
           from_address: txData.from,
@@ -129,7 +136,6 @@ exports.verify = async (req, res) => {
       return res.status(404).json({ error: 'Transaction not found', code: 'NOT_FOUND' });
     }
 
-    // Compute the hash the same way the smart contract does
     const appLayerHash = ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
         ['address', 'address', 'uint256'],
@@ -137,8 +143,8 @@ exports.verify = async (req, res) => {
       )
     );
 
-    const onChainHash  = tx.metadata_hash || null;
-    const match        = onChainHash ? appLayerHash === onChainHash : null;
+    const onChainHash = tx.metadata_hash || null;
+    const match       = onChainHash ? appLayerHash === onChainHash : null;
 
     return res.status(200).json({
       verified:      true,
@@ -157,22 +163,68 @@ exports.verify = async (req, res) => {
 exports.send = async (req, res) => {
   const { to, toName, amount } = req.body;
 
-  // Accept either a wallet address (`to`) or a display name (`toName`)
   if ((!to && !toName) || !amount) {
     return res.status(400).json({ error: 'Recipient (to or toName) and amount are required', code: 'VALIDATION_ERROR' });
   }
 
   let toAddress = to || null;
 
-  // Resolve by name if toName was provided, or if `to` is not a valid address
+  // Resolve recipient by name if toName provided or `to` is not a valid address
   const needsLookup = toName || (to && !ethers.isAddress(to));
   if (needsLookup) {
     const lookupName = toName || to;
-    const recipient = await db('users').whereRaw('LOWER(name) = ?', [lookupName.toLowerCase()]).select('wallet_address').first();
-    if (!recipient || !recipient.wallet_address) {
-      return res.status(404).json({ error: 'Recipient not found or has no wallet', code: 'RECIPIENT_NOT_FOUND' });
+    try {
+      const recipient = await db('users')
+        .whereRaw('LOWER(name) = ?', [lookupName.toLowerCase()])
+        .select('wallet_address')
+        .first();
+      if (!recipient || !recipient.wallet_address) {
+        return res.status(404).json({ error: 'Recipient not found or has no wallet', code: 'RECIPIENT_NOT_FOUND' });
+      }
+      toAddress = recipient.wallet_address;
+    } catch (err) {
+      console.error('Recipient lookup error:', err.message);
+      return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
     }
-    toAddress = recipient.wallet_address;
+  }
+
+  try {
+    const user = await db('users').where({ id: req.user.sub }).select('wallet_address').first();
+    if (!user.wallet_address) {
+      return res.status(400).json({ error: 'No wallet linked', code: 'WALLET_NOT_FOUND' });
+    }
+
+    const provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
+    const from     = user.wallet_address;
+    const value    = ethers.parseEther(String(amount));
+
+    const [nonce, gasEstimate, feeData, network] = await Promise.all([
+      provider.getTransactionCount(from),
+      provider.estimateGas({ from, to: toAddress, value }),
+      provider.getFeeData(),
+      provider.getNetwork(),
+    ]);
+
+    const txData = {
+      from,
+      to:       toAddress,
+      value:    value.toString(),
+      gasLimit: gasEstimate.toString(),
+      gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
+      nonce:    nonce.toString(),
+      chainId:  network.chainId.toString(),
+    };
+
+    // Invalidate cached balance + tx list so next fetch is fresh
+    cache.invalidateUser(req.user.sub);
+
+    return res.status(200).json({
+      txData,
+      note: 'Sign this transaction data with your wallet and broadcast it.',
+    });
+  } catch (err) {
+    console.error('Send preparation error:', err.message);
+    return res.status(500).json({ error: 'Transaction preparation failed', code: 'BLOCKCHAIN_ERROR' });
   }
 };
 
@@ -185,14 +237,12 @@ exports.broadcast = async (req, res) => {
   }
 
   try {
-    const provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
-    
-    // Broadcast the signed transaction
-    const txResponse = await provider.broadcastTransaction(signedTx);
-    
+    const provider    = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
+    const txResponse  = await provider.broadcastTransaction(signedTx);
+
     return res.status(200).json({
       txHash: txResponse.hash,
-      note: 'Transaction broadcasted successfully. It will be confirmed soon.',
+      note:   'Transaction broadcasted successfully. It will be confirmed soon.',
     });
   } catch (err) {
     console.error('Broadcast error:', err.message);
@@ -272,7 +322,8 @@ exports.pending = async (req, res) => {
     return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
   }
 };
-// POST /transactions/record  — called by browser after MetaMask signs
+
+// POST /transactions/record
 exports.record = async (req, res) => {
   const { txHash, from, to, amountEth, amountWei } = req.body;
 
@@ -293,7 +344,7 @@ exports.record = async (req, res) => {
 
     return res.status(201).json({
       txHash,
-      status: 'pending',
+      status:       'pending',
       etherscanUrl: (process.env.ETHERSCAN_BASE_URL || 'https://sepolia.etherscan.io/tx/') + txHash,
     });
   } catch (err) {
