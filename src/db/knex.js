@@ -37,18 +37,45 @@ const pgKnex = knex({
 
 let db = null;
 let connectPromise = null;
+let reconnectTimer = null;
 
 async function tryPostgres() {
   try {
     await pgKnex.raw('SELECT 1');
     db = pgKnex;
+    stopPostgresRetry();
     console.log('DB: PostgreSQL (Supabase) connected');
   } catch (err) {
     console.warn('DB: PostgreSQL unreachable, using SQLite fallback:', err.message.slice(0, 80));
+    console.warn('WARNING: writes (including transaction hashes) go to local SQLite until PostgreSQL returns');
     db = createSqlite();
     if (!db) {
       console.error('DB: Both PostgreSQL and SQLite unavailable — database features disabled');
     }
+    startPostgresRetry();
+  }
+}
+
+function startPostgresRetry() {
+  if (reconnectTimer) return;
+  reconnectTimer = setInterval(async () => {
+    try {
+      await pgKnex.raw('SELECT 1');
+      db = pgKnex;
+      stopPostgresRetry();
+      console.log('DB: PostgreSQL (Supabase) reconnected — switching from SQLite fallback');
+      await pgKnex.migrate.latest().catch(() => {});
+    } catch (_) {
+      // PostgreSQL still unreachable; keep retrying.
+    }
+  }, 20000);
+  if (reconnectTimer.unref) reconnectTimer.unref();
+}
+
+function stopPostgresRetry() {
+  if (reconnectTimer) {
+    clearInterval(reconnectTimer);
+    reconnectTimer = null;
   }
 }
 
@@ -63,6 +90,7 @@ module.exports = new Proxy(() => { throw new Error('Database connection not yet 
     if (prop === 'pgKnex') return pgKnex;
     if (prop === 'tryPostgres') return tryPostgres;
     if (prop === 'createSqlite') return createSqlite;
+    if (prop === 'stopPostgresRetry') return stopPostgresRetry;
     if (prop === 'connect') return connectPromise;
     if (!db) {
       throw new Error('Database connection not yet established — call connect() first');
