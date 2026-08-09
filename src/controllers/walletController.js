@@ -25,6 +25,82 @@ const db     = require('../db/knex');
 const { ethers } = require('ethers');
 const crypto = require('crypto');
 
+const WALLET_REGISTRY_ABI = [
+  "function registerWallet(bytes32 hashedUserId) external",
+  "event WalletRegistered(address indexed wallet, bytes32 indexed hashedUserId, uint256 timestamp)",
+];
+const WALLET_REGISTRY_ADDRESS = process.env.WALLET_REGISTRY_ADDRESS;
+
+// ── GET /wallet/transactions ────────────────────────────────────────────────
+exports.getTransactions = async (req, res) => {
+  const { filter = 'all', page = 1, limit = 20 } = req.query;
+  const safePage = Math.max(1, parseInt(page, 10) || 1);
+  const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  const offset = (safePage - 1) * safeLimit;
+
+  try {
+    const user = await db('users')
+      .where({ id: req.user.sub })
+      .select('wallet_address')
+      .first();
+
+    if (!user?.wallet_address) {
+      return res.status(200).json({
+        transactions: [],
+        total: 0,
+        page: safePage,
+        limit: safeLimit,
+        pages: 0,
+      });
+    }
+
+    const wallet = user.wallet_address.toLowerCase();
+    let query = db('transactions');
+
+    if (filter === 'sent') {
+      query = query.whereRaw('LOWER(from_address) = ?', [wallet]);
+    } else if (filter === 'received') {
+      query = query.whereRaw('LOWER(to_address) = ?', [wallet]);
+    } else {
+      query = query.where(function () {
+        this.whereRaw('LOWER(from_address) = ?', [wallet])
+          .orWhereRaw('LOWER(to_address) = ?', [wallet]);
+      });
+    }
+
+    const totalRow = await query.clone().count('id as count').first();
+    const transactions = await query
+      .orderBy('created_at', 'desc')
+      .limit(safeLimit)
+      .offset(offset);
+
+    const formatted = transactions.map((tx) => ({
+      txHash: tx.tx_hash,
+      from: tx.from_address,
+      to: tx.to_address,
+      amountWei: tx.amount_wei,
+      amountEth: ethers.formatEther(tx.amount_wei),
+      status: tx.status,
+      blockNumber: tx.block_number,
+      timestamp: tx.created_at,
+      confirmedAt: tx.confirmed_at,
+      direction: tx.from_address?.toLowerCase() === wallet ? 'sent' : 'received',
+      etherscanUrl: `${process.env.ETHERSCAN_BASE_URL}${tx.tx_hash}`,
+    }));
+
+    return res.status(200).json({
+      transactions: formatted,
+      total: parseInt(totalRow.count, 10),
+      page: safePage,
+      limit: safeLimit,
+      pages: totalRow.count > 0 ? Math.ceil(totalRow.count / safeLimit) : 0,
+    });
+  } catch (err) {
+    console.error('Wallet transactions error:', err.message);
+    return res.status(500).json({ error: 'Something went wrong', code: 'INTERNAL_ERROR' });
+  }
+};
+
 // ── GET /wallet/nonce ─────────────────────────────────────────────────────────
 exports.getNonce = async (req, res) => {
   try {
@@ -124,12 +200,47 @@ exports.register = async (req, res) => {
         updated_at:           new Date(),
       });
 
-    console.log(`✅ Wallet linked: ${walletAddress} → user ${req.user.sub}`);
+    console.log(`Wallet linked: ${walletAddress} -> user ${req.user.sub}`);
+
+    // Prepare on-chain registration transaction via WalletRegistry contract
+    let onChainTx = null;
+    if (WALLET_REGISTRY_ADDRESS) {
+      try {
+        const provider    = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
+        const hashedUserId = ethers.keccak256(ethers.toUtf8Bytes(String(req.user.sub)));
+        const iface        = new ethers.Interface(WALLET_REGISTRY_ABI);
+        const data         = iface.encodeFunctionData('registerWallet', [hashedUserId]);
+
+        const [nonce, gasEstimate, feeData, network] = await Promise.all([
+          provider.getTransactionCount(walletAddress),
+          provider.estimateGas({ from: walletAddress, to: WALLET_REGISTRY_ADDRESS, data }),
+          provider.getFeeData(),
+          provider.getNetwork(),
+        ]);
+
+        onChainTx = {
+          from:     walletAddress,
+          to:       WALLET_REGISTRY_ADDRESS,
+          data,
+          value:    '0',
+          gasLimit: gasEstimate.toString(),
+          gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
+          nonce:    nonce.toString(),
+          chainId:  network.chainId.toString(),
+        };
+      } catch (txErr) {
+        console.error('On-chain registration tx prep failed:', txErr.message);
+      }
+    }
 
     return res.status(201).json({
       walletAddress,
       registeredAt: new Date(),
       message: 'Wallet linked successfully',
+      onChainTx: onChainTx ? {
+        txData: onChainTx,
+        note: 'Sign and broadcast this transaction to register your wallet on-chain via WalletRegistry contract.',
+      } : null,
     });
 
   } catch (err) {

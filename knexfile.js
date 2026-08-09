@@ -19,6 +19,15 @@ module.exports = {
     migrations: { directory: './migrations' },
     seeds:      { directory: './seeds' },
   },
+  sqlite: {
+    client: 'sqlite3',
+    connection: {
+      filename: './data/chainpay-baseline.sqlite3',
+    },
+    useNullAsDefault: true,
+    migrations: { directory: './migrations-sqlite' },
+    pool: { min: 0, max: 1 },
+  },
   production: {
     client: 'pg',
     connection: {

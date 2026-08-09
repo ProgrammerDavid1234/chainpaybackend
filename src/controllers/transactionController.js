@@ -2,6 +2,12 @@ const db     = require('../db/knex');
 const { ethers } = require('ethers');
 const cache  = require('../middleware/cache');
 
+const PAYMENT_PROCESSOR_ABI = [
+  "function sendPayment(address to) external payable",
+  "event PaymentSent(address indexed from, address indexed to, uint256 amount, uint256 timestamp, uint256 txIndex)",
+];
+const PAYMENT_PROCESSOR_ADDRESS = process.env.PAYMENT_PROCESSOR_ADDRESS;
+
 // GET /transactions
 exports.list = async (req, res) => {
   const { filter = 'all', page = 1, limit = 20 } = req.query;
@@ -198,28 +204,64 @@ exports.send = async (req, res) => {
     const from     = user.wallet_address;
     const value    = ethers.parseEther(String(amount));
 
-    const [nonce, gasEstimate, feeData, network] = await Promise.all([
-      provider.getTransactionCount(from),
-      provider.estimateGas({ from, to: toAddress, value }),
-      provider.getFeeData(),
-      provider.getNetwork(),
-    ]);
+    // Compute metadata hash for on-chain verification
+    const metadataHash = ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        ['address', 'address', 'uint256'],
+        [from, toAddress, value.toString()]
+      )
+    );
 
-    const txData = {
-      from,
-      to:       toAddress,
-      value:    value.toString(),
-      gasLimit: gasEstimate.toString(),
-      gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
-      nonce:    nonce.toString(),
-      chainId:  network.chainId.toString(),
-    };
+    let txData;
+
+    if (PAYMENT_PROCESSOR_ADDRESS) {
+      // Contract-based payment: call PaymentProcessor.sendPayment(to)
+      const iface     = new ethers.Interface(PAYMENT_PROCESSOR_ABI);
+      const data      = iface.encodeFunctionData('sendPayment', [toAddress]);
+      const gasEstimate = await provider.estimateGas({ from, to: PAYMENT_PROCESSOR_ADDRESS, data, value });
+      const [nonce, feeData, network] = await Promise.all([
+        provider.getTransactionCount(from),
+        provider.getFeeData(),
+        provider.getNetwork(),
+      ]);
+
+      txData = {
+        from,
+        to:       PAYMENT_PROCESSOR_ADDRESS,
+        data,
+        value:    value.toString(),
+        gasLimit: gasEstimate.toString(),
+        gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
+        nonce:    nonce.toString(),
+        chainId:  network.chainId.toString(),
+      };
+    } else {
+      // Fallback: direct wallet-to-wallet transfer
+      const [nonce, gasEstimate, feeData, network] = await Promise.all([
+        provider.getTransactionCount(from),
+        provider.estimateGas({ from, to: toAddress, value }),
+        provider.getFeeData(),
+        provider.getNetwork(),
+      ]);
+
+      txData = {
+        from,
+        to:       toAddress,
+        value:    value.toString(),
+        gasLimit: gasEstimate.toString(),
+        gasPrice: feeData.gasPrice ? feeData.gasPrice.toString() : '0',
+        nonce:    nonce.toString(),
+        chainId:  network.chainId.toString(),
+      };
+    }
 
     // Invalidate cached balance + tx list so next fetch is fresh
     cache.invalidateUser(req.user.sub);
 
     return res.status(200).json({
       txData,
+      metadataHash,
+      usesContract: !!PAYMENT_PROCESSOR_ADDRESS,
       note: 'Sign this transaction data with your wallet and broadcast it.',
     });
   } catch (err) {
@@ -230,7 +272,7 @@ exports.send = async (req, res) => {
 
 // POST /transactions/broadcast
 exports.broadcast = async (req, res) => {
-  const { signedTx } = req.body;
+  const { signedTx, metadataHash, to, from, amountWei } = req.body;
 
   if (!signedTx || !signedTx.startsWith('0x')) {
     return res.status(400).json({ error: 'Valid signed transaction required', code: 'VALIDATION_ERROR' });
@@ -239,6 +281,20 @@ exports.broadcast = async (req, res) => {
   try {
     const provider    = new ethers.JsonRpcProvider(process.env.ETHEREUM_NODE_URL);
     const txResponse  = await provider.broadcastTransaction(signedTx);
+
+    // Pre-record the transaction if metadata is provided
+    if (metadataHash && to && from) {
+      await db('transactions').insert({
+        tx_hash:      txResponse.hash,
+        from_address: from,
+        to_address:   to,
+        amount_wei:   amountWei || '0',
+        status:       'pending',
+        metadata_hash: metadataHash,
+        created_at:   new Date(),
+        updated_at:   new Date(),
+      }).onConflict('tx_hash').ignore();
+    }
 
     return res.status(200).json({
       txHash: txResponse.hash,
