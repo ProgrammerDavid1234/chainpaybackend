@@ -56,7 +56,7 @@ connectPromise = tryPostgres();
 
 const baselineDb = null;
 
-module.exports = new Proxy({}, {
+module.exports = new Proxy(() => { throw new Error('Database connection not yet established — call connect() first'); }, {
   get(_, prop) {
     if (prop === 'baselineDb') return db || createSqlite();
     if (prop === 'SQLITE_FILE') return SQLITE_FILE;
@@ -68,5 +68,11 @@ module.exports = new Proxy({}, {
       throw new Error('Database connection not yet established — call connect() first');
     }
     return db[prop];
+  },
+  apply(_, thisArg, args) {
+    if (!db) {
+      throw new Error('Database connection not yet established — call connect() first');
+    }
+    return db(...args);
   },
 });
