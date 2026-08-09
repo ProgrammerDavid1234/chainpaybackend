@@ -9,12 +9,17 @@ const SQLITE_FILE = path.resolve(__dirname, '../../data/chainpay-baseline.sqlite
 function createSqlite() {
   const dir = path.dirname(SQLITE_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return knex({
-    client: 'sqlite3',
-    connection: { filename: SQLITE_FILE },
-    useNullAsDefault: true,
-    pool: { min: 0, max: 1 },
-  });
+  try {
+    return knex({
+      client: 'sqlite3',
+      connection: { filename: SQLITE_FILE },
+      useNullAsDefault: true,
+      pool: { min: 0, max: 1 },
+    });
+  } catch (err) {
+    console.warn('SQLite client unavailable, falling back to PostgreSQL-only:', err.message.slice(0, 80));
+    return null;
+  }
 }
 
 const pgKnex = knex({
@@ -31,6 +36,7 @@ const pgKnex = knex({
 });
 
 let db = null;
+let connectPromise = null;
 
 async function tryPostgres() {
   try {
@@ -40,10 +46,13 @@ async function tryPostgres() {
   } catch (err) {
     console.warn('DB: PostgreSQL unreachable, using SQLite fallback:', err.message.slice(0, 80));
     db = createSqlite();
+    if (!db) {
+      console.error('DB: Both PostgreSQL and SQLite unavailable — database features disabled');
+    }
   }
 }
 
-tryPostgres();
+connectPromise = tryPostgres();
 
 const baselineDb = null;
 
@@ -54,6 +63,10 @@ module.exports = new Proxy({}, {
     if (prop === 'pgKnex') return pgKnex;
     if (prop === 'tryPostgres') return tryPostgres;
     if (prop === 'createSqlite') return createSqlite;
-    return (db || createSqlite())[prop];
+    if (prop === 'connect') return connectPromise;
+    if (!db) {
+      throw new Error('Database connection not yet established — call connect() first');
+    }
+    return db[prop];
   },
 });

@@ -49,6 +49,7 @@ app.listen(PORT, async () => {
   // Auto-run pending migrations on every startup
   try {
     const knex = require('./db/knex');
+    await knex.connect; // wait for PostgreSQL/SQLite connection
     await knex.migrate.latest();
     console.log('Migrations up to date');
   } catch (err) {

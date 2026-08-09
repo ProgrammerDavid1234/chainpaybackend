@@ -22,8 +22,10 @@
     "node-cache": "^5.1.2",
     "pg": "^8.20.0",
     "qrcode": "^1.5.4",
-    "sqlite3": "^6.0.1",
     "uuid": "^14.0.0"
+  },
+  "optionalDependencies": {
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^7.0.0",
