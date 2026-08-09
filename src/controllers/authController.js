@@ -1,11 +1,11 @@
 const QRCode = require('qrcode');
 const bcrypt = require('bcrypt');
 const jwt    = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const db     = require('../db/knex');
 
 const signToken = (userId) => {
-  const jti = uuidv4();
+  const jti = crypto.randomUUID();
   const token = jwt.sign(
     { sub: userId, jti },
     process.env.JWT_SECRET,
